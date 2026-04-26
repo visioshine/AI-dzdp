@@ -122,7 +122,7 @@ const MOCK_REVIEWS = [
   }
 ];
 
-// Helper to parse JSON body
+// Helper to parse request body (supports both JSON and form-urlencoded)
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -131,7 +131,15 @@ function parseBody(req) {
     });
     req.on('end', () => {
       try {
-        resolve(JSON.parse(body));
+        const contentType = req.headers['content-type'] || '';
+        
+        if (contentType.includes('application/x-www-form-urlencoded')) {
+          resolve(Object.fromEntries(new URLSearchParams(body)));
+        } else if (contentType.includes('application/json') || body.trim().startsWith('{')) {
+          resolve(JSON.parse(body));
+        } else {
+          resolve({});
+        }
       } catch (e) {
         reject(e);
       }
@@ -218,9 +226,9 @@ const server = http.createServer(async (req, res) => {
   // Handle login endpoint
   if (req.method === 'POST' && req.url === '/token') {
     try {
-      const formData = new URLSearchParams(await parseBody(req));
-      const username = formData.get('username') || (await parseBody(req)).username;
-      const password = formData.get('password') || (await parseBody(req)).password;
+      const data = await parseBody(req);
+      const username = data.username;
+      const password = data.password;
 
       const user = mockUsers.find(u => 
         u.username === username || 
@@ -243,6 +251,7 @@ const server = http.createServer(async (req, res) => {
         token_type: 'bearer'
       }));
     } catch (e) {
+      console.error('Login error:', e);
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ detail: '请求格式错误' }));
     }

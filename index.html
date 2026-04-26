@@ -1,0 +1,1459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>大众生活 - 本地生活服务</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Baidu Maps API (Replace YOUR_BAIDU_MAPS_AK with a real key if needed) -->
+    <script src="https://api.map.baidu.com/api?type=webgl&v=1.0&ak=n3XjzVtv0Y8DGbM639TVbHCGdO2AEzMa"></script>
+    <script src="mock_data.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans" x-data="appData()" x-init="init()">
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="container mx-auto px-4 h-16 flex items-center justify-between">
+            <div class="flex items-center space-x-2 cursor-pointer" @click="goHome()">
+                <div class="bg-orange-500 text-white p-2 rounded-lg">
+                    <i class="fas fa-store"></i>
+                </div>
+                <h1 class="text-xl font-bold text-orange-600 hidden sm:block">大众生活</h1>
+            </div>
+
+            <div class="flex-1 max-w-xl mx-4 relative">
+                <input type="text" x-model="searchQuery" @input="filterMerchants()" placeholder="搜索商家、美食、休闲娱乐..." 
+                    class="w-full bg-gray-100 border-none rounded-full px-5 py-2 focus:ring-2 focus:ring-orange-500 outline-none">
+                <i class="fas fa-search absolute right-4 top-3 text-gray-400"></i>
+            </div>
+
+            <div class="flex items-center space-x-4">
+                <template x-if="!user">
+                    <button @click="showAuthModal = true; showPassword = false" class="text-gray-600 hover:text-orange-600 font-medium">登录/注册</button>
+                </template>
+                <template x-if="user">
+                    <div class="flex items-center space-x-2 cursor-pointer" @click="showProfileModal = true; fetchUserStats()">
+                        <img :src="user.avatar" class="w-8 h-8 rounded-full border border-gray-200">
+                        <span class="text-gray-700 font-medium hidden sm:block" x-text="user.username"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-6">
+        <!-- Categories -->
+        <div class="flex space-x-4 overflow-x-auto no-scrollbar pb-4 mb-6">
+            <template x-for="cat in categories" :key="cat.name">
+                <button @click="selectedCategory = cat.name; filterMerchants()" 
+                    :class="selectedCategory === cat.name ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-orange-50'"
+                    class="flex flex-col items-center justify-center min-w-[80px] p-3 rounded-2xl shadow-sm transition-all duration-200 shrink-0">
+                    <i :class="cat.icon" class="text-xl mb-1"></i>
+                    <span class="text-xs font-medium" x-text="cat.name"></span>
+                </button>
+            </template>
+        </div>
+
+        <!-- Banner / Promotions -->
+        <div class="mb-8 rounded-3xl overflow-hidden shadow-lg relative h-48 sm:h-64 bg-gradient-to-r from-orange-400 to-orange-600 flex items-center px-8">
+            <div class="z-10 text-white">
+                <h2 class="text-3xl font-bold mb-2">周末美食大放送</h2>
+                <p class="text-orange-100 mb-4">全场餐饮低至 5 折起，探索城市美味。</p>
+                <button class="bg-white text-orange-600 px-6 py-2 rounded-full font-bold shadow-md hover:bg-orange-50 transition">立即查看</button>
+            </div>
+            <img src="https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop" class="absolute right-0 top-0 h-full w-1/2 object-cover opacity-50 mask-gradient" style="mask-image: linear-gradient(to left, black, transparent);">
+        </div>
+
+        <!-- Merchant List -->
+        <div class="mb-6 flex items-center justify-between">
+            <h3 class="text-xl font-bold flex items-center">
+                <span class="w-1.5 h-6 bg-orange-500 rounded-full mr-2"></span>
+                <span x-text="selectedCategory === '全部' ? '为您推荐' : selectedCategory"></span>
+            </h3>
+            <div class="flex items-center space-x-4 text-sm text-gray-500">
+                <div x-show="userLocation" class="text-xs text-gray-400 mr-2 flex items-center">
+                    <i class="fas fa-location-crosshairs mr-1"></i>
+                    <span>定位成功</span>
+                    <button @click="getUserLocation()" class="ml-1 text-orange-500 hover:underline">刷新</button>
+                    <span class="mx-1 text-gray-300">|</span>
+                    <button @click="showMapModal = true; initMap()" class="text-orange-500 hover:underline">查看定位</button>
+                </div>
+                <span @click="sortBy = 'default'; fetchMerchants()" :class="sortBy === 'default' ? 'text-orange-600 font-medium' : ''" class="cursor-pointer hover:text-orange-600">综合排序</span>
+                <span @click="sortBy = 'distance'; fetchMerchants()" :class="sortBy === 'distance' ? 'text-orange-600 font-medium' : ''" class="cursor-pointer hover:text-orange-600">距离最近</span>
+                <span @click="sortBy = 'rating'; fetchMerchants()" :class="sortBy === 'rating' ? 'text-orange-600 font-medium' : ''" class="cursor-pointer hover:text-orange-600">好评优先</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <template x-for="merchant in filteredMerchants" :key="merchant.id">
+                <div @click="showMerchantDetail(merchant)" class="bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition cursor-pointer group">
+                    <div class="relative h-48">
+                        <img :src="merchant.image_url" class="w-full h-full object-cover group-hover:scale-105 transition duration-500">
+                        <div class="absolute top-3 right-3 bg-black/50 backdrop-blur-md text-white px-2 py-1 rounded-lg text-xs" x-text="merchant.category"></div>
+                        <!-- Distance Badge -->
+                        <template x-if="merchant.dist_meters !== undefined">
+                            <div class="absolute bottom-3 right-3 bg-orange-500/90 backdrop-blur text-white px-2 py-1 rounded-lg text-xs font-bold" 
+                                x-text="formatDistance(merchant.dist_meters)"></div>
+                        </template>
+                    </div>
+                    <div class="p-4">
+                        <div class="flex justify-between items-start mb-2">
+                            <h4 class="text-lg font-bold group-hover:text-orange-600 transition" x-text="merchant.name"></h4>
+                            <div class="flex items-center text-orange-500 font-bold">
+                                <i class="fas fa-star mr-1 text-sm"></i>
+                                <span x-text="merchant.rating.toFixed(1)"></span>
+                            </div>
+                        </div>
+                        <p class="text-gray-500 text-sm mb-3 line-clamp-2" x-text="merchant.description"></p>
+                        <div class="flex items-center justify-between mt-auto">
+                            <div class="text-sm text-gray-400 flex items-center max-w-[70%]">
+                                <i class="fas fa-location-dot mr-1 shrink-0"></i>
+                                <span class="truncate" x-text="merchant.address"></span>
+                            </div>
+                            <div class="text-orange-600 font-bold shrink-0" x-text="merchant.price"></div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- No Results -->
+        <template x-if="filteredMerchants.length === 0">
+            <div class="py-20 text-center">
+                <div class="text-6xl text-gray-200 mb-4"><i class="fas fa-search"></i></div>
+                <h3 class="text-xl text-gray-500 font-medium">没找到相关商家，换个词试试吧</h3>
+            </div>
+        </template>
+    </main>
+
+    <!-- Merchant Detail Modal -->
+    <div x-show="showDetailModal" x-cloak class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div @click="showDetailModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-4xl max-h-[90vh] rounded-3xl overflow-hidden relative shadow-2xl flex flex-col sm:flex-row">
+            <button @click="showDetailModal = false" class="absolute top-4 right-4 z-10 bg-white/80 backdrop-blur text-gray-800 w-10 h-10 rounded-full shadow-lg hover:bg-orange-500 hover:text-white transition">
+                <i class="fas fa-times"></i>
+            </button>
+            
+            <div class="w-full sm:w-1/2 h-64 sm:h-auto shrink-0">
+                <img :src="selectedMerchant?.image_url" class="w-full h-full object-cover">
+            </div>
+            
+            <div class="p-6 sm:p-8 flex-1 overflow-y-auto no-scrollbar bg-white">
+                <div class="mb-6">
+                    <div class="flex items-center space-x-2 mb-2">
+                        <span class="bg-orange-100 text-orange-600 px-2 py-0.5 rounded text-xs font-bold" x-text="selectedMerchant?.category"></span>
+                        <div class="flex items-center text-orange-500 font-bold text-sm">
+                            <i class="fas fa-star mr-1"></i>
+                            <span x-text="selectedMerchant?.rating.toFixed(1)"></span>
+                            <span class="text-gray-400 font-normal ml-2" x-text="'(' + selectedMerchant?.reviews_count + ' 条评价)'"></span>
+                        </div>
+                    </div>
+                    <h2 class="text-2xl font-bold mb-4" x-text="selectedMerchant?.name"></h2>
+                    <p class="text-gray-600 mb-6 leading-relaxed" x-text="selectedMerchant?.description"></p>
+                    
+                    <div class="space-y-3 mb-8 bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                        <div class="flex items-center text-gray-600">
+                            <i class="fas fa-location-dot w-6 text-orange-500"></i>
+                            <div class="flex-1">
+                                <span x-text="selectedMerchant?.address"></span>
+                                <template x-if="selectedMerchant?.dist_meters">
+                                    <span class="ml-2 text-xs text-orange-500 font-bold" x-text="'(距离您 ' + formatDistance(selectedMerchant.dist_meters) + ')'"></span>
+                                </template>
+                            </div>
+                        </div>
+                        <div class="flex items-center text-gray-600">
+                            <i class="fas fa-phone w-6 text-orange-500"></i>
+                            <span x-text="selectedMerchant?.phone"></span>
+                        </div>
+                        <div class="flex items-center text-gray-600">
+                            <i class="fas fa-clock w-6 text-orange-500"></i>
+                            <span>营业时间：10:00 - 22:00</span>
+                        </div>
+                    </div>
+
+                    <div class="flex space-x-3 mb-8">
+                        <button class="flex-1 bg-orange-500 text-white font-bold py-3 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition">立即预约</button>
+                        <button @click="toggleFavorite()" class="w-12 h-12 flex items-center justify-center border rounded-2xl transition"
+                            :class="isFavorited ? 'bg-red-50 border-red-200 text-red-500' : 'border-gray-200 text-gray-400 hover:bg-gray-50 hover:text-red-500'">
+                            <i class="text-xl" :class="isFavorited ? 'fas fa-heart' : 'far fa-heart'"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Reviews Section -->
+                <div class="border-t pt-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <h3 class="text-lg font-bold">精选评价</h3>
+                        <button @click="openAddReview()" class="text-orange-500 font-bold text-sm hover:text-orange-600">写评价</button>
+                    </div>
+                    <div class="space-y-6">
+                        <template x-for="review in merchantReviews" :key="review.id">
+                            <div class="border-b border-gray-50 pb-6 last:border-0">
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="flex items-center space-x-2">
+                                        <div class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                                            <i class="fas fa-user text-xs"></i>
+                                        </div>
+                                        <span class="font-bold text-sm" x-text="review.user"></span>
+                                    </div>
+                                    <span class="text-xs text-gray-400" x-text="review.date"></span>
+                                </div>
+                                <div class="flex text-orange-400 text-xs mb-2">
+                                    <template x-for="i in 5">
+                                        <i class="fas fa-star" :class="i <= review.rating ? 'text-orange-400' : 'text-gray-200'"></i>
+                                    </template>
+                                </div>
+                                <p class="text-gray-600 text-sm leading-relaxed" x-text="review.content"></p>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Modal (Login/Register) -->
+    <div x-show="showAuthModal" x-cloak class="fixed inset-0 z-[110] flex items-center justify-center p-4">
+        <div @click="showAuthModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl p-8">
+            <h2 class="text-2xl font-bold mb-6 text-center" x-text="authMode === 'login' ? '欢迎回来' : '开启大众生活'"></h2>
+            
+            <div class="space-y-4 mb-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+                    <input type="text" x-model="authForm.username" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                </div>
+                <template x-if="authMode === 'register'">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">邮箱</label>
+                        <input type="email" x-model="authForm.email" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                </template>
+                <div class="relative">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">密码</label>
+                    <input :type="showPassword ? 'text' : 'password'" x-model="authForm.password" 
+                        class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none pr-12">
+                    <button @click="showPassword = !showPassword" class="absolute right-4 top-[38px] text-gray-400 hover:text-orange-500 transition focus:outline-none">
+                        <i class="fas" :class="showPassword ? 'fa-eye-slash' : 'fa-eye'"></i>
+                    </button>
+                </div>
+            </div>
+
+            <button @click="handleAuth()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition mb-6" x-text="authMode === 'login' ? '立即登录' : '注册账号'"></button>
+            
+            <div class="text-center text-sm mb-4" x-show="authMode === 'login'">
+                <button @click="showResetModal = true" class="text-orange-500 font-bold hover:underline">忘记密码？</button>
+            </div>
+            
+            <div class="text-center text-sm">
+                <span class="text-gray-500" x-text="authMode === 'login' ? '还没有账号？' : '已有账号？'"></span>
+                <button @click="authMode = authMode === 'login' ? 'register' : 'login'" class="text-orange-500 font-bold ml-1 hover:underline" x-text="authMode === 'login' ? '立即注册' : '立即登录'"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Password Reset Modal -->
+    <div x-show="showResetModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showResetModal = false; resetStep = 1" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl p-8">
+            <h2 class="text-2xl font-bold mb-6 text-center">找回密码</h2>
+            
+            <!-- Step 1: Enter email -->
+            <div x-show="resetStep === 1">
+                <p class="text-gray-500 text-sm mb-4 text-center">请输入您的注册邮箱</p>
+                <div class="space-y-4 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">邮箱</label>
+                        <input type="email" x-model="resetForm.email" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                </div>
+                <button @click="requestPasswordReset()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition mb-4">发送验证码</button>
+            </div>
+            
+            <!-- Step 2: Enter verification code and new password -->
+            <div x-show="resetStep === 2">
+                <p class="text-gray-500 text-sm mb-4 text-center">请输入收到的验证码和新密码</p>
+                <div class="space-y-4 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">6位验证码</label>
+                        <input type="text" x-model="resetForm.verificationCode" maxlength="6" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none text-center text-2xl tracking-widest" placeholder="000000">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+                        <input type="password" x-model="resetForm.newPassword" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">确认密码</label>
+                        <input type="password" x-model="resetForm.confirmPassword" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                </div>
+                <button @click="completePasswordReset()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition mb-4">确认重置</button>
+                <button @click="resetStep = 1" class="w-full text-gray-500 hover:text-orange-500">重新发送验证码</button>
+            </div>
+            
+            <!-- Success message -->
+            <div x-show="resetStep === 3">
+                <div class="text-center mb-6">
+                    <i class="fas fa-check-circle text-5xl text-green-500 mb-4"></i>
+                    <p class="text-gray-600" x-text="resetMessage"></p>
+                </div>
+                <button @click="showResetModal = false; resetStep = 1" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition">返回登录</button>
+            </div>
+            
+            <button @click="showResetModal = false; resetStep = 1" class="absolute top-4 right-4 text-gray-400 hover:text-orange-500">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Add Review Modal -->
+    <div x-show="showReviewModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showReviewModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl p-8">
+            <h2 class="text-2xl font-bold mb-6 text-center">评价商家</h2>
+            <div class="flex justify-center space-x-2 mb-8">
+                <template x-for="i in 5">
+                    <button @click="newReview.rating = i" class="text-3xl focus:outline-none transition transform hover:scale-110">
+                        <i class="fas fa-star" :class="i <= newReview.rating ? 'text-orange-400' : 'text-gray-200'"></i>
+                    </button>
+                </template>
+            </div>
+            <textarea x-model="newReview.content" rows="4" placeholder="说说你的消费体验吧，你的评价对其他小伙伴很有帮助哦~" 
+                class="w-full bg-gray-50 border-none rounded-2xl px-5 py-4 focus:ring-2 focus:ring-orange-500 outline-none mb-6 resize-none"></textarea>
+            <button @click="submitReview()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition">提交评价</button>
+        </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div x-show="showProfileModal" x-cloak class="fixed inset-0 z-[110] flex items-center justify-center p-4">
+        <div @click="showProfileModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl">
+            <div class="bg-gradient-to-r from-orange-400 to-orange-600 h-32 relative">
+                <button @click="showProfileModal = false" class="absolute top-4 right-4 text-white hover:text-orange-100">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="px-8 pb-8">
+                <div class="relative -mt-12 mb-4">
+                    <img :src="user?.avatar" class="w-24 h-24 rounded-full border-4 border-white shadow-lg mx-auto bg-white">
+                </div>
+                <h2 class="text-2xl font-bold text-center mb-1" x-text="user?.username"></h2>
+                <p class="text-gray-400 text-sm text-center mb-8" x-text="user?.email"></p>
+                
+                <div class="grid grid-cols-3 gap-4 mb-8">
+                    <div class="text-center">
+                        <div class="text-xl font-bold text-gray-800" x-text="userStats.reviews"></div>
+                        <div class="text-xs text-gray-400">评价</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xl font-bold text-gray-800" x-text="userStats.favorites"></div>
+                        <div class="text-xs text-gray-400">收藏</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-xl font-bold text-gray-800" x-text="userStats.points"></div>
+                        <div class="text-xs text-gray-400">积分</div>
+                    </div>
+                </div>
+
+                <div class="space-y-1 mb-8">
+                    <button @click="fetchMyReviews()" class="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-gray-50 text-gray-700 transition">
+                        <div class="flex items-center"><i class="fas fa-file-lines w-8 text-orange-500"></i><span>我的评价</span></div>
+                        <i class="fas fa-chevron-right text-xs text-gray-300"></i>
+                    </button>
+                    <button @click="fetchMyFavorites()" class="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-gray-50 text-gray-700 transition">
+                        <div class="flex items-center"><i class="fas fa-heart w-8 text-orange-500"></i><span>我的收藏</span></div>
+                        <i class="fas fa-chevron-right text-xs text-gray-300"></i>
+                    </button>
+                    <button @click="openSettings()" class="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-gray-50 text-gray-700 transition">
+                        <div class="flex items-center"><i class="fas fa-gear w-8 text-orange-500"></i><span>个人设置</span></div>
+                        <i class="fas fa-chevron-right text-xs text-gray-300"></i>
+                    </button>
+                    <button @click="openPasswordModal()" class="w-full flex items-center justify-between p-4 rounded-2xl hover:bg-gray-50 text-gray-700 transition">
+                        <div class="flex items-center"><i class="fas fa-lock w-8 text-orange-500"></i><span>修改密码</span></div>
+                        <i class="fas fa-chevron-right text-xs text-gray-300"></i>
+                    </button>
+                </div>
+
+                <button @click="logout()" class="w-full bg-gray-100 text-gray-500 font-bold py-4 rounded-2xl hover:bg-gray-200 transition">退出登录</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div x-show="showPasswordModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showPasswordModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl p-8">
+            <h2 class="text-2xl font-bold mb-6 text-center">修改密码</h2>
+            
+            <div class="space-y-4 mb-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">当前密码</label>
+                    <input type="password" x-model="passwordForm.currentPassword" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">新密码</label>
+                    <input type="password" x-model="passwordForm.newPassword" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">确认新密码</label>
+                    <input type="password" x-model="passwordForm.confirmPassword" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                </div>
+            </div>
+            
+            <button @click="changePassword()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition mb-4">确认修改</button>
+            
+            <button @click="showPasswordModal = false" class="absolute top-4 right-4 text-gray-400 hover:text-orange-500">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- My Reviews Modal -->
+    <div x-show="showMyReviewsModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showMyReviewsModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-2xl max-h-[80vh] rounded-3xl overflow-hidden relative shadow-2xl flex flex-col">
+            <div class="p-6 border-b flex items-center justify-between shrink-0">
+                <h2 class="text-2xl font-bold">我的评价</h2>
+                <button @click="showMyReviewsModal = false" class="text-gray-400 hover:text-orange-500">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 overflow-y-auto no-scrollbar flex-1">
+                <template x-if="myReviews.length === 0">
+                    <div class="text-center py-10">
+                        <i class="fas fa-comment-slash text-4xl text-gray-200 mb-3 block"></i>
+                        <p class="text-gray-400">暂无评价内容</p>
+                    </div>
+                </template>
+                
+                <div class="space-y-6">
+                    <template x-for="review in myReviews" :key="review.id">
+                        <div class="bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                            <div class="flex justify-between items-start mb-2">
+                                <h4 class="font-bold text-orange-600" x-text="review.merchantName"></h4>
+                                <span class="text-xs text-gray-400" x-text="review.date"></span>
+                            </div>
+                            <div class="flex text-orange-400 text-xs mb-2">
+                                <template x-for="i in 5">
+                                    <i class="fas fa-star" :class="i <= review.rating ? 'text-orange-400' : 'text-gray-200'"></i>
+                                </template>
+                            </div>
+                            <p class="text-gray-700 text-sm leading-relaxed" x-text="review.content"></p>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- My Favorites Modal -->
+    <div x-show="showFavoritesModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showFavoritesModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-2xl max-h-[80vh] rounded-3xl overflow-hidden relative shadow-2xl flex flex-col">
+            <div class="p-6 border-b flex items-center justify-between shrink-0">
+                <h2 class="text-2xl font-bold">我的收藏</h2>
+                <button @click="showFavoritesModal = false" class="text-gray-400 hover:text-orange-500">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <div class="p-6 overflow-y-auto no-scrollbar flex-1">
+                <template x-if="myFavorites.length === 0">
+                    <div class="text-center py-10">
+                        <i class="fas fa-heart-crack text-4xl text-gray-200 mb-3 block"></i>
+                        <p class="text-gray-400">暂无收藏商家</p>
+                    </div>
+                </template>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <template x-for="merchant in myFavorites" :key="merchant.id">
+                        <div @click="showMerchantDetail(merchant); showFavoritesModal = false" class="bg-gray-50 rounded-2xl overflow-hidden border border-gray-100 hover:shadow-md transition cursor-pointer flex">
+                            <img :src="merchant.image_url" class="w-24 h-24 object-cover">
+                            <div class="p-3 flex-1 min-w-0">
+                                <h4 class="font-bold text-gray-800 truncate" x-text="merchant.name"></h4>
+                                <div class="flex items-center text-orange-500 text-xs mt-1">
+                                    <i class="fas fa-star mr-1"></i>
+                                    <span x-text="merchant.rating.toFixed(1)"></span>
+                                </div>
+                                <div class="text-gray-400 text-xs mt-2 truncate" x-text="merchant.address"></div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Personal Settings Modal -->
+    <div x-show="showSettingsModal" x-cloak class="fixed inset-0 z-[120] flex items-center justify-center p-4">
+        <div @click="showSettingsModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-md rounded-3xl overflow-hidden relative shadow-2xl flex flex-col">
+            <div class="p-6 border-b flex items-center justify-between shrink-0">
+                <h2 class="text-2xl font-bold">个人设置</h2>
+                <button @click="showSettingsModal = false" class="text-gray-400 hover:text-orange-500">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <div class="p-8 overflow-y-auto no-scrollbar flex-1">
+                <div class="space-y-5">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">用户名</label>
+                        <input type="text" x-model="settingsForm.username" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">手机号</label>
+                        <input type="text" x-model="settingsForm.phone" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none" placeholder="未设置">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">个人简介</label>
+                        <textarea x-model="settingsForm.bio" rows="3" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none resize-none" placeholder="介绍一下自己吧..."></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">口头禅</label>
+                        <input type="text" x-model="settingsForm.catchphrase" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none" placeholder="你的个性口头禅">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">性别</label>
+                        <div class="flex space-x-4 mt-2">
+                            <label class="flex items-center space-x-2 cursor-pointer">
+                                <input type="radio" x-model="settingsForm.gender" value="male" class="text-orange-500 focus:ring-orange-500">
+                                <span class="text-sm text-gray-600">男</span>
+                            </label>
+                            <label class="flex items-center space-x-2 cursor-pointer">
+                                <input type="radio" x-model="settingsForm.gender" value="female" class="text-orange-500 focus:ring-orange-500">
+                                <span class="text-sm text-gray-600">女</span>
+                            </label>
+                            <label class="flex items-center space-x-2 cursor-pointer">
+                                <input type="radio" x-model="settingsForm.gender" value="secret" class="text-orange-500 focus:ring-orange-500">
+                                <span class="text-sm text-gray-600">保密</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">头像 URL</label>
+                    <input type="text" x-model="settingsForm.avatar" class="w-full bg-gray-50 border-none rounded-2xl px-5 py-3 focus:ring-2 focus:ring-orange-500 outline-none" placeholder="默认头像">
+                </div>
+                </div>
+
+                <button @click="updateProfile()" class="w-full bg-orange-500 text-white font-bold py-4 rounded-2xl shadow-lg shadow-orange-200 hover:bg-orange-600 transition mt-8">保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Modal -->
+    <div x-show="showMapModal" x-cloak class="fixed inset-0 z-[130] flex items-center justify-center p-4">
+        <div @click="showMapModal = false" class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="bg-white w-full max-w-2xl rounded-3xl overflow-hidden relative shadow-2xl flex flex-col h-[60vh] sm:h-[70vh]">
+            <div class="p-4 border-b flex items-center justify-between shrink-0">
+                <h2 class="text-xl font-bold flex items-center">
+                    <i class="fas fa-map-location-dot text-orange-500 mr-2"></i>
+                    当前位置预览
+                </h2>
+                <button @click="showMapModal = false" class="text-gray-400 hover:text-orange-500">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div id="map" class="flex-1 w-full bg-gray-100"></div>
+            <div class="p-4 bg-gray-50 border-t flex items-center justify-between text-sm">
+                <div class="text-gray-500 flex flex-col">
+                    <div class="flex items-center">
+                        <i class="fas fa-location-dot text-orange-500 mr-1"></i>
+                        <span class="font-medium text-gray-700" x-text="currentAddress || '正在解析详细地址...'"></span>
+                    </div>
+                    <span class="text-xs text-gray-400 mt-1">经度: <span x-text="userLocation?.lng.toFixed(4)"></span>, 纬度: <span x-text="userLocation?.lat.toFixed(4)"></span></span>
+                </div>
+                <button @click="getUserLocation().then(() => initMap())" class="bg-orange-500 text-white px-4 py-2 rounded-xl hover:bg-orange-600 transition flex items-center shrink-0">
+                    <i class="fas fa-location-arrow mr-2"></i>
+                    重新定位
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div x-show="toast.show" x-cloak 
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0 translate-y-4"
+        x-transition:enter-end="opacity-100 translate-y-0"
+        x-transition:leave="transition ease-in duration-200"
+        x-transition:leave-start="opacity-100 translate-y-0"
+        x-transition:leave-end="opacity-0 translate-y-4"
+        class="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-[200]">
+        <div class="bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl flex items-center space-x-2">
+            <i class="fas fa-circle-info text-orange-400"></i>
+            <span x-text="toast.message"></span>
+        </div>
+    </div>
+
+    <script>
+        // Supabase 配置（请从 https://supabase.com 获取）
+        var SUPABASE_URL = 'https://skivgbwmwbpcuvhkrdrv.supabase.co';
+        var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNraXZnYndtd2JwY3V2aGtyZHJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3ODI2ODgsImV4cCI6MjA5MDM1ODY4OH0.2A5BbCkiL5m0zEsG8wAZL65LKwo7lk_OfKzjD9HM3NQ';
+        var supabaseClient = null;
+
+        // 初始化 Supabase 客户端的函数
+        function getSupabase() {
+            if (!supabaseClient) {
+                if (typeof supabase === 'undefined') {
+                    console.error('Supabase SDK not loaded yet');
+                    return null;
+                }
+                if (SUPABASE_URL === 'YOUR_SUPABASE_URL' || SUPABASE_ANON_KEY === 'YOUR_SUPABASE_ANON_KEY') {
+                    console.warn('Supabase URL or Key not configured. Using Mock mode.');
+                    return null;
+                }
+                supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            }
+            return supabaseClient;
+        }
+
+        function appData() {
+            return {
+                user: null,
+                searchQuery: '',
+                selectedCategory: '全部',
+                merchants: [],
+                filteredMerchants: [],
+                selectedMerchant: null,
+                merchantReviews: [],
+                showDetailModal: false,
+                showAuthModal: false,
+                showReviewModal: false,
+                showProfileModal: false,
+                showMyReviewsModal: false,
+                showFavoritesModal: false,
+                showSettingsModal: false,
+                showMapModal: false,
+                myReviews: [],
+                myFavorites: [],
+                isFavorited: false,
+                sortBy: 'default', // 'default', 'rating', 'distance'
+                userLocation: null,
+                baiduMap: null,
+                currentAddress: '',
+                userStats: { reviews: 0, favorites: 0, points: 0 },
+                authMode: 'login',
+                showPassword: false,
+                showResetModal: false,
+                resetStep: 1,
+                resetForm: { email: '', verificationCode: '', newPassword: '', confirmPassword: '' },
+                resetEmail: '',
+                resetMessage: '',
+                authForm: { username: '', email: '', password: '' },
+                settingsForm: { username: '', phone: '', bio: '', catchphrase: '', gender: 'secret', avatar: '' },
+                showPasswordModal: false,
+                passwordForm: { currentPassword: '', newPassword: '', confirmPassword: '' },
+                newReview: { rating: 5, content: '' },
+                toast: { show: false, message: '' },
+                categories: [
+                    { name: '全部', icon: 'fas fa-grid-2' },
+                    { name: '美食', icon: 'fas fa-utensils' },
+                    { name: '休闲娱乐', icon: 'fas fa-couch' },
+                    { name: '电影', icon: 'fas fa-film' },
+                    { name: '文化生活', icon: 'fas fa-book' },
+                    { name: '运动健康', icon: 'fas fa-dumbbell' }
+                ],
+
+                async init() {
+                    // 延迟一秒执行首次定位，给百度地图 API 留出加载时间
+                    setTimeout(() => {
+                        this.getUserLocation();
+                    }, 1000);
+
+                    // 检查当前登录状态
+                    const savedUser = localStorage.getItem('user');
+                    if (savedUser) {
+                        this.user = JSON.parse(savedUser);
+                        // 确保用户对象包含所有必要字段
+                        this.user = {
+                            ...this.user,
+                            phone: this.user.phone || '',
+                            bio: this.user.bio || '',
+                            catchphrase: this.user.catchphrase || '',
+                            gender: this.user.gender || 'secret'
+                        };
+                        if (this.user.token) {
+                            localStorage.setItem('token', this.user.token);
+                        }
+                        this.fetchUserStats(); // 获取统计数据
+                    }
+
+                    // 初始获取商家数据
+                    await this.fetchMerchants();
+                },
+
+                async fetchUserProfile(userId) {
+                    try {
+                        const client = getSupabase();
+                        if (!client) return;
+
+                        const { data, error } = await client
+                            .from('users')
+                            .select('*')
+                            .eq('id', userId)
+                            .single();
+                        
+                        if (error) throw error;
+
+                        this.user = {
+                            id: data.id,
+                            username: data.username,
+                            email: data.email,
+                            phone: data.phone || '',
+                            bio: data.bio || '',
+                            catchphrase: data.catchphrase || '',
+                            gender: data.gender || 'secret',
+                            avatar: data.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${data.id}`
+                        };
+                    } catch (err) {
+                        console.error('Error fetching profile:', err);
+                    }
+                },
+
+                async fetchUserStats() {
+                    if (!this.user) return;
+                    try {
+                        // 使用后端 API 获取用户统计数据
+                        const token = localStorage.getItem('token');
+                        const response = await fetch('/users/me/stats', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (!response.ok) {
+                            throw new Error('获取用户统计数据失败');
+                        }
+                        this.userStats = await response.json();
+                    } catch (err) {
+                        console.error('Error fetching user stats:', err);
+                        // 使用默认值作为回退
+                        this.userStats = {
+                            reviews: 0,
+                            favorites: 0,
+                            points: 0
+                        };
+                    }
+                },
+
+                async fetchMerchants() {
+                    try {
+                        // 构建 API 请求 URL
+                        let url = '/merchants';
+                        if (this.selectedCategory !== '全部') {
+                            url += `?category=${encodeURIComponent(this.selectedCategory)}`;
+                        }
+                        
+                        // 使用后端 API 获取商家数据
+                        const response = await fetch(url);
+                        if (!response.ok) {
+                            throw new Error('获取商家列表失败');
+                        }
+                        
+                        this.merchants = await response.json();
+                        
+                        // 计算与当前位置的距离（模拟）
+                        if (this.userLocation) {
+                            this.merchants.forEach(merchant => {
+                                // 这里使用模拟的距离计算，实际应根据经纬度计算
+                                merchant.distance = (Math.random() * 5 + 0.1).toFixed(1);
+                            });
+                        }
+                        
+                        // 应用排序
+                        if (this.sortBy === 'rating') {
+                            this.merchants.sort((a, b) => b.rating - a.rating);
+                        } else if (this.sortBy === 'distance' && this.userLocation) {
+                            this.merchants.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+                        }
+                        
+                        this.filterMerchants();
+                        
+                        // 如果没有数据，使用模拟数据作为回退
+                        if (this.merchants.length === 0) {
+                            this.merchants = MOCK_MERCHANTS;
+                            this.filteredMerchants = this.merchants;
+                        }
+                    } catch (err) {
+                        console.error('Error fetching merchants:', err);
+                        this.showToast('获取商家列表失败: ' + (err.message || '未知错误'));
+                        // 使用模拟数据作为回退
+                        this.merchants = MOCK_MERCHANTS;
+                        this.filteredMerchants = this.merchants;
+                    }
+                },
+
+                getUserLocation() {
+                    return new Promise((resolve) => {
+                        // 检查 BMapGL 是否已加载且非空
+                        const hasBMap = typeof BMapGL !== 'undefined' && BMapGL !== null;
+                        
+                        if (hasBMap && BMapGL.Geolocation) {
+                            try {
+                                const geolocation = new BMapGL.Geolocation();
+                                geolocation.getCurrentPosition((r) => {
+                                    if (geolocation.getStatus() === 0) {
+                                        this.userLocation = {
+                                            lat: r.point.lat,
+                                            lng: r.point.lng
+                                        };
+                                        console.log('Baidu location acquired:', this.userLocation);
+                                        this.updateUserLocationInDB();
+                                        this.showToast('定位成功 (百度地图)');
+                                        resolve(this.userLocation);
+                                    } else {
+                                        console.warn('Baidu geolocation failed, status:', geolocation.getStatus());
+                                        this.fallbackToBrowserGeolocation(resolve);
+                                    }
+                                }, { enableHighAccuracy: true });
+                            } catch (e) {
+                                console.error('Baidu Geolocation error:', e);
+                                this.fallbackToBrowserGeolocation(resolve);
+                            }
+                        } else {
+                            console.log('BMapGL not ready or failed, using browser geolocation');
+                            this.fallbackToBrowserGeolocation(resolve);
+                        }
+                    });
+                },
+
+                fallbackToBrowserGeolocation(resolve) {
+                    if (!navigator.geolocation) {
+                        this.showToast('您的浏览器不支持地理定位');
+                        resolve(null);
+                        return;
+                    }
+
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            this.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            console.log('Browser location acquired:', this.userLocation);
+                            this.updateUserLocationInDB();
+                            this.showToast('定位成功 (浏览器辅助)');
+                            resolve(this.userLocation);
+                        },
+                        (error) => {
+                            console.error('Error getting location:', error);
+                            let msg = '无法获取位置信息';
+                            if (error.code === 1) msg = '定位权限被拒绝，请在浏览器设置中开启';
+                            else if (error.code === 2) msg = '暂时无法获取位置信息';
+                            else if (error.code === 3) msg = '获取位置超时';
+                            this.showToast(msg);
+                            resolve(null);
+                        },
+                        { timeout: 10000 }
+                    );
+                },
+
+                async updateUserLocationInDB() {
+                    if (!this.user || !this.userLocation) return;
+                    try {
+                        const client = getSupabase();
+                        if (!client) return;
+
+                        const { error } = await client
+                            .from('users')
+                            .update({
+                                last_location: `POINT(${this.userLocation.lng} ${this.userLocation.lat})`
+                            })
+                            .eq('id', this.user.id);
+                        
+                        if (error) console.warn('Failed to update location in DB:', error.message);
+                    } catch (err) {
+                        console.error('DB update location error:', err);
+                    }
+                },
+
+                initMap() {
+                    const hasBMap = typeof BMapGL !== 'undefined' && BMapGL !== null;
+                    if (!this.userLocation || !hasBMap) {
+                        if (!hasBMap) this.showToast('百度地图未加载成功，请检查网络或配置');
+                        return;
+                    }
+                    
+                    setTimeout(() => {
+                        try {
+                            const lat = this.userLocation.lat;
+                            const lng = this.userLocation.lng;
+                            const point = new BMapGL.Point(lng, lat);
+
+                            if (!this.baiduMap) {
+                                this.baiduMap = new BMapGL.Map("map");
+                                this.baiduMap.enableScrollWheelZoom(true);
+                            }
+                            
+                            this.baiduMap.centerAndZoom(point, 18);
+                            this.baiduMap.clearOverlays();
+                            
+                            const marker = new BMapGL.Marker(point);
+                            this.baiduMap.addOverlay(marker);
+
+                            // 逆地址解析
+                            if (BMapGL.Geocoder) {
+                                const geocoder = new BMapGL.Geocoder();
+                                geocoder.getLocation(point, (rs) => {
+                                    const addComp = rs.addressComponents;
+                                    this.currentAddress = rs.address || (addComp.province + addComp.city + addComp.district + addComp.street + addComp.streetNumber);
+                                    
+                                    const labelContent = `<div class="p-1 font-bold text-orange-600">${addComp.district}${addComp.street}${addComp.streetNumber}</div>`;
+                                    const label = new BMapGL.Label(labelContent, {
+                                        position: point,
+                                        offset: new BMapGL.Size(10, -30)
+                                    });
+                                    label.setStyle({
+                                        border: '1px solid #ff6600',
+                                        borderRadius: '4px',
+                                        padding: '2px 5px',
+                                        background: '#fff'
+                                    });
+                                    this.baiduMap.addOverlay(label);
+                                });
+                            }
+                        } catch (e) {
+                            console.error('Baidu Map init error:', e);
+                            this.showToast('地图加载出错');
+                        }
+                    }, 100);
+                },
+
+                formatDistance(meters) {
+                    if (meters === undefined || meters === null) return '';
+                    const m = parseFloat(meters);
+                    if (isNaN(m)) return '';
+                    if (m < 1000) return `${Math.round(m)}m`;
+                    return `${(m / 1000).toFixed(1)}km`;
+                },
+
+                goHome() {
+                    this.selectedCategory = '全部';
+                    this.searchQuery = '';
+                    this.fetchMerchants();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                },
+
+                filterMerchants() {
+                    // 由于 Supabase 是远程获取，这里我们简单做前端过滤以保证响应速度，
+                    // 也可以调用 this.fetchMerchants() 进行服务端搜索。
+                    this.filteredMerchants = this.merchants.filter(m => {
+                        const matchCat = this.selectedCategory === '全部' || m.category === this.selectedCategory;
+                        const matchSearch = m.name.includes(this.searchQuery) || m.description.includes(this.searchQuery);
+                        return matchCat && matchSearch;
+                    });
+                },
+
+                async showMerchantDetail(merchant) {
+                    this.selectedMerchant = merchant;
+                    this.showDetailModal = true;
+                    this.checkFavoriteStatus(); // 检查收藏状态
+                    
+                    try {
+                        // 使用后端 API 获取商家详情和评价
+                        const response = await fetch(`/merchants/${merchant.id}`);
+                        if (!response.ok) {
+                            throw new Error('获取商家详情失败');
+                        }
+                        
+                        const merchantDetail = await response.json();
+                        
+                        // 更新商家详情
+                        this.selectedMerchant = merchantDetail;
+                        
+                        // 格式化评价数据以适配前端展示
+                        this.merchantReviews = (merchantDetail.reviews || []).map(r => ({
+                            ...r,
+                            user: r.author.username,
+                            date: r.created_at.split('T')[0]
+                        }));
+                        
+                        // 如果没有评价且是 Mock 商家，显示 Mock 评价
+                        if (this.merchantReviews.length === 0 && merchant.id <= 5) {
+                            this.merchantReviews = MOCK_REVIEWS.filter(r => r.merchant_id === merchant.id);
+                        }
+                    } catch (err) {
+                        console.error('Error fetching merchant detail:', err);
+                        this.merchantReviews = MOCK_REVIEWS.filter(r => r.merchant_id === merchant.id);
+                    }
+                },
+
+                async handleAuth() {
+                    if (!this.authForm.username || !this.authForm.password) {
+                        this.showToast('请填写完整信息');
+                        return;
+                    }
+
+                    try {
+                        if (this.authMode === 'register') {
+                            if (!this.authForm.email) {
+                                this.showToast('请填写邮箱');
+                                return;
+                            }
+
+                            // 使用后端 API 注册
+                            const response = await fetch('/register', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    username: this.authForm.username,
+                                    email: this.authForm.email,
+                                    password: this.authForm.password
+                                })
+                            });
+
+                            if (!response.ok) {
+                                const error = await response.json();
+                                throw new Error(error.detail || '注册失败');
+                            }
+
+                            const user = await response.json();
+                            this.showToast('注册成功！');
+                            this.authMode = 'login';
+                        } else {
+                            // 使用后端 API 登录获取令牌
+                            const response = await fetch('/token', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded'
+                                },
+                                body: new URLSearchParams({
+                                    username: this.authForm.username,
+                                    password: this.authForm.password
+                                })
+                            });
+
+                            if (!response.ok) {
+                                const error = await response.json();
+                                throw new Error(error.detail || '登录失败');
+                            }
+
+                            const data = await response.json();
+                            
+                            // 使用token获取完整的用户信息
+                            const userResponse = await fetch('/users/me', {
+                                headers: {
+                                    'Authorization': `Bearer ${data.access_token}`
+                                }
+                            });
+                            
+                            if (userResponse.ok) {
+                                this.user = await userResponse.json();
+                                // 确保用户对象包含所有必要字段
+                                this.user = {
+                                    ...this.user,
+                                    token: data.access_token,
+                                    phone: this.user.phone || '',
+                                    bio: this.user.bio || '',
+                                    catchphrase: this.user.catchphrase || '',
+                                    gender: this.user.gender || 'secret'
+                                };
+                                localStorage.setItem('user', JSON.stringify(this.user));
+                                localStorage.setItem('token', data.access_token);
+                                this.showAuthModal = false;
+                                this.fetchUserStats();
+                                this.showToast('欢迎回来！');
+                            } else {
+                                // 如果获取用户信息失败，使用默认值
+                                this.user = {
+                                    id: 1, // 简化处理
+                                    username: this.authForm.username,
+                                    email: this.authForm.username.includes('@') ? this.authForm.username : `${this.authForm.username}@example.com`,
+                                    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${this.authForm.username}`,
+                                    phone: '',
+                                    bio: '',
+                                    catchphrase: '',
+                                    gender: 'secret',
+                                    token: data.access_token
+                                };
+                                localStorage.setItem('user', JSON.stringify(this.user));
+                                localStorage.setItem('token', data.access_token);
+                                this.showAuthModal = false;
+                                this.fetchUserStats();
+                                this.showToast('欢迎回来！');
+                            }
+                        }
+                    } catch (err) {
+                        this.showToast(err.message || '操作失败，请检查配置');
+                        console.error('Auth error:', err);
+                    }
+                },
+
+                async logout() {
+                    localStorage.removeItem('user');
+                    localStorage.removeItem('token');
+                    this.user = null;
+                    this.showProfileModal = false; // 关闭个人中心
+                    this.showAuthModal = true; // 打开登录页面
+                    this.showToast('已退出登录');
+                },
+
+                async requestPasswordReset() {
+                    if (!this.resetForm.email) {
+                        this.showToast('请输入邮箱地址');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch('/password-reset-request', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                email: this.resetForm.email
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || '请求失败');
+                        }
+                        
+                        const data = await response.json();
+                        // 保存邮箱用于后续重置
+                        this.resetEmail = data.email;
+                        this.resetStep = 2;
+                        this.showToast('验证码已发送，请查收邮箱');
+                    } catch (err) {
+                        this.showToast(err.message || '操作失败');
+                        console.error('Password reset error:', err);
+                    }
+                },
+
+                async completePasswordReset() {
+                    if (!this.resetForm.verificationCode || !this.resetForm.newPassword || !this.resetForm.confirmPassword) {
+                        this.showToast('请填写完整信息');
+                        return;
+                    }
+                    
+                    if (this.resetForm.verificationCode.length !== 6) {
+                        this.showToast('验证码必须是6位数字');
+                        return;
+                    }
+                    
+                    if (this.resetForm.newPassword !== this.resetForm.confirmPassword) {
+                        this.showToast('两次密码输入不一致');
+                        return;
+                    }
+                    
+                    try {
+                        const response = await fetch('/password-reset', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                email: this.resetEmail || this.resetForm.email,
+                                verification_code: this.resetForm.verificationCode,
+                                new_password: this.resetForm.newPassword
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || '重置失败');
+                        }
+                        
+                        this.resetStep = 3;
+                        this.resetMessage = '密码重置成功，请使用新密码登录';
+                        this.resetForm = { email: '', verificationCode: '', newPassword: '', confirmPassword: '' };
+                    } catch (err) {
+                        this.showToast(err.message || '操作失败');
+                        console.error('Password reset error:', err);
+                    }
+                },
+
+                async changePassword() {
+                    if (!this.passwordForm.currentPassword || !this.passwordForm.newPassword || !this.passwordForm.confirmPassword) {
+                        this.showToast('请填写完整信息');
+                        return;
+                    }
+                    
+                    if (this.passwordForm.newPassword !== this.passwordForm.confirmPassword) {
+                        this.showToast('两次密码输入不一致');
+                        return;
+                    }
+                    
+                    try {
+                        const token = localStorage.getItem('token');
+                        const response = await fetch('/users/me/change-password', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify({
+                                current_password: this.passwordForm.currentPassword,
+                                new_password: this.passwordForm.newPassword
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || '修改失败');
+                        }
+                        
+                        this.showPasswordModal = false;
+                        this.passwordForm = { currentPassword: '', newPassword: '', confirmPassword: '' };
+                        this.showToast('密码修改成功');
+                    } catch (err) {
+                        this.showToast(err.message || '操作失败');
+                        console.error('Change password error:', err);
+                    }
+                },
+
+                openPasswordModal() {
+                    this.passwordForm = { currentPassword: '', newPassword: '', confirmPassword: '' };
+                    this.showPasswordModal = true;
+                },
+
+                async fetchMyReviews() {
+                    if (!this.user) return;
+                    try {
+                        const token = localStorage.getItem('token');
+                        const response = await fetch('/users/me/reviews', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (!response.ok) {
+                            throw new Error('获取评价列表失败');
+                        }
+                        const reviews = await response.json();
+                        
+                        this.myReviews = (reviews || []).map(r => ({
+                            ...r,
+                            merchantName: r.merchant?.name || '未知商家',
+                            date: r.created_at.split('T')[0]
+                        }));
+                        
+                        this.showMyReviewsModal = true;
+                    } catch (err) {
+                        console.error('Error fetching my reviews:', err);
+                        this.showToast('无法获取评价列表');
+                    }
+                },
+
+                async fetchMyFavorites() {
+                    if (!this.user) return;
+                    try {
+                        const token = localStorage.getItem('token');
+                        const response = await fetch('/users/me/favorites', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (!response.ok) {
+                            throw new Error('获取收藏列表失败');
+                        }
+                        this.myFavorites = await response.json();
+                        this.showFavoritesModal = true;
+                    } catch (err) {
+                        console.error('Error fetching my favorites:', err);
+                        this.showToast('无法获取收藏列表');
+                    }
+                },
+
+                async checkFavoriteStatus() {
+                    if (!this.user || !this.selectedMerchant) {
+                        this.isFavorited = false;
+                        return;
+                    }
+                    try {
+                        const token = localStorage.getItem('token');
+                        // 获取用户收藏列表
+                        const response = await fetch('/users/me/favorites', {
+                            headers: {
+                                'Authorization': `Bearer ${token}`
+                            }
+                        });
+                        if (!response.ok) {
+                            throw new Error('获取收藏列表失败');
+                        }
+                        const favorites = await response.json();
+                        
+                        // 检查当前商家是否在收藏列表中
+                        this.isFavorited = favorites.some(fav => fav.id === this.selectedMerchant.id);
+                    } catch (err) {
+                        console.error('Error checking favorite status:', err);
+                        this.isFavorited = false;
+                    }
+                },
+
+                async toggleFavorite() {
+                    if (!this.user) {
+                        this.showAuthModal = true;
+                        this.showToast('请先登录后再收藏');
+                        return;
+                    }
+                    try {
+                        const token = localStorage.getItem('token');
+                        
+                        if (this.isFavorited) {
+                            // 取消收藏
+                            const response = await fetch(`/users/me/favorites/${this.selectedMerchant.id}`, {
+                                method: 'DELETE',
+                                headers: {
+                                    'Authorization': `Bearer ${token}`
+                                }
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error('取消收藏失败');
+                            }
+                            this.isFavorited = false;
+                            this.showToast('已取消收藏');
+                        } else {
+                            // 添加收藏
+                            const response = await fetch(`/users/me/favorites/${this.selectedMerchant.id}`, {
+                                method: 'POST',
+                                headers: {
+                                    'Authorization': `Bearer ${token}`
+                                }
+                            });
+                            
+                            if (!response.ok) {
+                                throw new Error('添加收藏失败');
+                            }
+                            this.isFavorited = true;
+                            this.showToast('收藏成功');
+                        }
+                        this.fetchUserStats(); // 刷新统计
+                    } catch (err) {
+                        console.error('Error toggling favorite:', err);
+                        this.showToast('操作失败，请重试');
+                    }
+                },
+
+                openSettings() {
+                    this.settingsForm = {
+                        username: this.user.username,
+                        phone: this.user.phone,
+                        bio: this.user.bio,
+                        catchphrase: this.user.catchphrase,
+                        gender: this.user.gender,
+                        avatar: this.user.avatar
+                    };
+                    this.showSettingsModal = true;
+                },
+
+                async updateProfile() {
+                    if (!this.settingsForm.username) {
+                        this.showToast('用户名不能为空');
+                        return;
+                    }
+                    try {
+                        // 使用后端 API 更新用户信息
+                        const token = localStorage.getItem('token');
+                        const response = await fetch('/users/me', {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify(this.settingsForm)
+                        });
+                        
+                        if (!response.ok) {
+                            const errorData = await response.json().catch(() => ({}));
+                            throw new Error(errorData.detail || '更新失败');
+                        }
+
+                        // 更新用户信息
+                        this.user = await response.json();
+                        // 确保用户对象包含所有必要字段
+                        this.user = {
+                            ...this.user,
+                            phone: this.user.phone || '',
+                            bio: this.user.bio || '',
+                            catchphrase: this.user.catchphrase || '',
+                            gender: this.user.gender || 'secret'
+                        };
+                        // 保存到localStorage
+                        localStorage.setItem('user', JSON.stringify(this.user));
+                        this.showSettingsModal = false;
+                        this.showToast('个人资料已更新');
+                    } catch (err) {
+                        console.error('Error updating profile:', err);
+                        this.showToast('更新失败: ' + (err.message || '未知错误'));
+                    }
+                },
+
+                openAddReview() {
+                    if (!this.user) {
+                        this.showAuthModal = true;
+                        this.showToast('请先登录后再评价');
+                        return;
+                    }
+                    this.showReviewModal = true;
+                },
+
+                async submitReview() {
+                    if (!this.newReview.content) {
+                        this.showToast('请输入评价内容');
+                        return;
+                    }
+
+                    try {
+                        // 使用后端 API 提交评价
+                        const response = await fetch(`/merchants/${this.selectedMerchant.id}/reviews`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${this.user.token}`
+                            },
+                            body: JSON.stringify({
+                                rating: this.newReview.rating,
+                                content: this.newReview.content
+                            })
+                        });
+
+                        if (!response.ok) {
+                            const error = await response.json();
+                            throw new Error(error.detail || '评价提交失败');
+                        }
+
+                        const newReviewData = await response.json();
+
+                        // 更新本地评价列表
+                        this.merchantReviews.unshift({
+                            ...newReviewData,
+                            user: this.user.username,
+                            user_avatar: this.user.avatar,
+                            date: new Date(newReviewData.created_at).toISOString().split('T')[0]
+                        });
+
+                        // 更新用户统计数据
+                        this.fetchUserStats();
+                        
+                        this.showReviewModal = false;
+                        this.showToast('评价提交成功！');
+                    } catch (err) {
+                        this.showToast('评价提交失败: ' + (err.message || '未知错误'));
+                        console.error('Review error details:', err);
+                    }
+                },
+
+                showToast(msg) {
+                    this.toast.message = msg;
+                    this.toast.show = true;
+                    setTimeout(() => this.toast.show = false, 3000);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
